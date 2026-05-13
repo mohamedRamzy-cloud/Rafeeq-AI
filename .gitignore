@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*~
+*.so
+*.egg
+*.egg-info/
+pip-wheel-metadata/
+.python-version
+Model_Test_Questions.txt
+medical_dataset.parquet
+medical_dataset_clean.json
+
+
+# Virtual environments
+venv/
+.env
+.env.*
+
+# IDEs
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

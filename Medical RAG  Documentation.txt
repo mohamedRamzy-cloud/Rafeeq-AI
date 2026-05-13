@@ -1,0 +1,883 @@
+================================================================================
+
+                              R A F E E Q   A I
+                         Medical Assistant System
+                           System Documentation
+
+================================================================================
+
+                    Authors:  Mohamed Ramzy  &  Mohamed Reda
+                              AI Engineering Students
+
+                    Status:   Production-Ready MVP
+                    Version:  1.0.0
+
+--------------------------------------------------------------------------------
+
+  IMPORTANT NOTICE
+
+  This system is intended for educational and research purposes only.
+  It does not replace professional medical consultation or clinical diagnosis.
+  Always consult a qualified physician for medical decisions.
+
+================================================================================
+
+
+
+================================================================================
+  TABLE OF CONTENTS
+================================================================================
+
+  Chapter 1  ....  What Is Rafeeq?
+  Chapter 2  ....  How the System Works — The Full Journey
+  Chapter 3  ....  The Safety System
+  Chapter 4  ....  Conversation Memory
+  Chapter 5  ....  Real-Time Streaming
+  Chapter 6  ....  API Reference
+  Chapter 7  ....  Performance
+  Chapter 8  ....  When Things Go Wrong — Fault Tolerance
+  Chapter 9  ....  Deployment and Configuration
+  Chapter 10 ....  Limitations and Roadmap
+
+================================================================================
+
+
+
+================================================================================
+  CHAPTER 1
+  What Is Rafeeq?
+================================================================================
+
+  The Problem Rafeeq Solves
+  ─────────────────────────
+
+  Most AI assistants generate answers purely from what the language model
+  learned during training. In a medical context, this creates two serious
+  problems.
+
+  First, the model can state incorrect facts with apparent confidence — a
+  phenomenon called hallucination. Second, the model's knowledge has a cutoff
+  date and may not include specialized or updated medical content.
+
+  Rafeeq addresses both problems through a technique called Retrieval-Augmented
+  Generation, or RAG. Before generating any response, Rafeeq searches a
+  database of medical documents and retrieves the most relevant passages. Those
+  passages are injected directly into the prompt. The model is effectively told:
+  "Here is what the medical literature says on this topic — now answer based
+  on this." The model's role shifts from being the source of knowledge to being
+  the interpreter of retrieved knowledge.
+
+
+  What Makes It Different
+  ───────────────────────
+
+  Grounded answers
+      Every response is anchored in retrieved medical documents,
+      not model memory alone.
+
+  Arabic-first design
+      Built specifically for Egyptian Arabic, including dialect
+      normalization and natural conversational phrasing.
+
+  Hard safety gate
+      A dedicated emergency detection system fires before any AI
+      model is consulted — ensuring that urgent symptoms always
+      receive an immediate, appropriate response.
+
+  Real-time delivery
+      Responses stream word by word as they are generated. The user
+      sees the first word appear in under one second.
+
+  Modular architecture
+      Each component of the system — retrieval, memory, routing,
+      streaming — is independently maintainable and replaceable.
+
+
+  What Rafeeq Is Not
+  ──────────────────
+
+  Rafeeq is not a diagnostic tool. It does not examine patients, order tests,
+  or prescribe treatment. It is a system that helps Arabic-speaking users
+  understand symptoms, learn about conditions, and know when professional help
+  is needed — delivered conversationally, in real time.
+
+
+================================================================================
+  CHAPTER 2
+  How the System Works — The Full Journey
+================================================================================
+
+  When a user sends a message, it passes through a structured pipeline. Each
+  stage either handles the message immediately and stops the pipeline, or passes
+  it forward with enriched information. Here is the complete journey, from the
+  moment a user presses send to the moment the response appears on screen.
+
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                    THE PIPELINE AT A GLANCE                     │
+  │                                                                 │
+  │  User sends message                                             │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  [ 1 ] Input Cleaning          ──  normalize the text           │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  [ 2 ] Quick Response Check    ──  greeting? answer instantly   │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  [ 3 ] Emergency Detection     ──  danger signs? stop here      │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  [ 4 ] Cache Lookup            ──  seen this before? return it  │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  [ 5 ] Parallel Processing     ──  4 tasks run at the same time │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  [ 6 ] Prompt Construction     ──  assemble context + history   │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  [ 7 ] LLM Streaming           ──  generate and stream response │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  [ 8 ] Post-Processing         ──  clean, save, persist         │
+  │        │                                                        │
+  │        ▼                                                        │
+  │  Response delivered to user                                     │
+  └─────────────────────────────────────────────────────────────────┘
+
+
+  Stage 1 — Input Cleaning
+  ─────────────────────────
+
+  The raw text is sanitized before anything else happens. Invisible characters
+  (null bytes) are removed, leading and trailing whitespace is stripped, and
+  Arabic letter variants are unified. For example, the letters (أ), (إ), and (آ)
+  are all normalized to (ا). This ensures that the same question typed in
+  slightly different ways produces the same cache key and the same retrieval
+  results.
+
+
+  Stage 2 — Quick Response Check
+  ──────────────────────────────
+
+  Common phrases are matched against a lookup table and returned instantly,
+  with no AI involvement at all. Greetings, identity questions ("who are you?"),
+  and simple acknowledgements fall into this category.
+
+  "سلام عليكم" returns a greeting in under one millisecond. No model is called,
+  no database is queried. The response is just a dictionary lookup.
+
+
+  Stage 3 — Emergency Detection
+  ──────────────────────────────
+
+  Before consulting any AI model, the message is scanned for emergency symptoms:
+  chest pain, shortness of breath, loss of consciousness, severe bleeding,
+  stroke indicators, and self-harm. This stage is covered in full detail in
+  Chapter 3. If a danger signal is found, an emergency response is returned
+  immediately and the pipeline stops.
+
+  This stage runs before the cache. Even if the system has a cached response
+  for a similar-sounding question, a message containing emergency keywords
+  always bypasses the cache and receives the emergency reply.
+
+
+  Stage 4 — Cache Lookup
+  ──────────────────────
+
+  The system checks whether this same question from this same session has been
+  answered before. The cache key combines the session identifier with the
+  normalized question text.
+
+  If a valid cached response exists, it is returned immediately. This eliminates
+  all subsequent stages — no retrieval, no model call, no prompt construction.
+  In typical usage, 60-80% of requests after the first few interactions are
+  served from cache.
+
+
+  Stage 5 — Parallel Processing
+  ──────────────────────────────
+
+  Four tasks run simultaneously in a thread pool rather than one after another:
+
+    Task A — Medical Brain
+        Classifies the question: what is the intent, which medical
+        specialty is relevant, how severe does this appear, and does
+        it constitute an emergency?
+
+    Task B — Document Retrieval
+        Converts the question into a mathematical vector and searches
+        the Qdrant vector database for the three most semantically
+        similar medical documents. These become the grounding context.
+
+    Task C — Fallback Lookup
+        Checks whether a pre-written response exists for this type
+        of question. Used as a backup if the AI model produces a
+        weak or unhelpful answer.
+
+    Task D — Memory Loading
+        Loads the conversation history for this session so that the
+        model will have context about what was discussed earlier.
+
+  Running these in parallel rather than sequentially reduces this phase from
+  3-6 seconds to under 100 milliseconds after startup.
+
+
+  Stage 6 — Prompt Construction
+  ──────────────────────────────
+
+  The prompt is assembled in a specific order that influences how the model
+  processes it. The order matters because the model reads from top to bottom
+  and gives more weight to earlier content when it is uncertain.
+
+    First:   The system prompt — personality, rules, and behavioral constraints.
+    Second:  Retrieved medical documents — placed early so the model treats
+             them as established background knowledge.
+    Third:   Conversation history — injected as real conversation turns,
+             not as plain text. This is explained in detail in Chapter 4.
+    Fourth:  The current question.
+
+  The complete reasoning behind prompt structure is covered in Chapter 4.
+
+
+  Stage 7 — LLM Streaming
+  ────────────────────────
+
+  The assembled prompt is sent to a language model. Rafeeq uses three providers
+  in order of preference: Groq (fastest), Google Gemini (strongest reasoning),
+  and OpenRouter (broadest availability as a fallback).
+
+  The response is not collected and then delivered — it streams back token by
+  token. A word-boundary buffer holds partial words and only delivers complete
+  words to the client. This prevents the broken-word display that occurs with
+  raw token streaming. Chapter 5 explains this in detail.
+
+
+  Stage 8 — Post-Processing and Persistence
+  ─────────────────────────────────────────
+
+  Once streaming completes, the full response text is cleaned of any artifacts,
+  a medical disclaimer is appended if the topic requires it, and the response
+  is saved to two places: the cache (so future identical questions are answered
+  instantly) and the conversation memory (so future turns in this session have
+  access to what was said).
+
+
+================================================================================
+  CHAPTER 3
+  The Safety System
+================================================================================
+
+  Why Safety Has Its Own Chapter
+  ───────────────────────────────
+
+  A medical AI that fails to recognize an emergency and returns a casual
+  informational response can cause direct harm. If someone is describing a
+  heart attack and the system responds with general information about chest
+  discomfort, the delay in recognizing the emergency could matter.
+
+  Rafeeq's safety system is built on one principle: it is better to
+  over-trigger emergency detection than to miss a real emergency. Four
+  independent layers check for danger. Any single layer firing is sufficient
+  to return the emergency response — they do not need to agree.
+
+
+  The Four Layers
+  ───────────────
+
+  Layer 1 — Regex Pattern Matching
+
+    Method:   A hard-coded list of regular expression patterns.
+    Detects:  Specific Arabic symptom keywords and phrases — chest pain,
+              shortness of breath, loss of consciousness, severe bleeding,
+              stroke indicators, suicidal ideation.
+    When:     Fires BEFORE cache lookup and BEFORE any AI call.
+    Speed:    Under 1 millisecond.
+
+    This layer uses pattern matching rather than AI because it must be
+    deterministic and instantaneous. It will function correctly even when
+    the database is down, the AI providers are unavailable, and the server
+    is under heavy load.
+
+    The patterns account for natural phrasing variations. For example,
+    the pattern for breathing difficulty matches both "ضيق في التنفس"
+    and "ضيق التنفس" and "صعوبة في التنفس" through flexible matching.
+
+  Layer 2 — AI Classification
+
+    Method:   MedicalAIBrain returns emergency = true.
+    Detects:  Emergency situations described without the specific keywords
+              that Layer 1 looks for — indirect or unusual descriptions
+              of serious symptoms.
+    When:     Fires after parallel processing completes.
+
+  Layer 3 — Route Escalation
+
+    Method:   ResponseRouter returns route = "emergency".
+    Detects:  High-risk combinations of intent and severity that the router
+              identifies based on the full analysis object.
+    When:     Fires at the routing decision point.
+
+  Layer 4 — Severity Scoring
+
+    Method:   MedicalAIBrain returns severity = "high".
+    Detects:  Conditions that are medically serious but described without
+              language that triggers Layer 1 or Layer 2 directly.
+    When:     Final catch-all before prompt construction.
+
+
+  Why Layer 1 Runs Before the Cache
+  ───────────────────────────────────
+
+  This is a deliberate design decision worth explaining clearly.
+
+  Imagine a user asked "what causes headaches?" yesterday. That question
+  was answered and cached. Today, the same user sends "اختناق والم شديد
+  في الصدر". If the cache ran first, the normalized key might match the
+  cached headache query and return that response to someone describing a
+  potential cardiac event.
+
+  Layer 1 runs before the cache check. The cache is only consulted after
+  the message has been confirmed to contain no emergency keywords.
+
+
+  The Emergency Response
+  ──────────────────────
+
+  The emergency response is a hard-coded string, not generated by any AI
+  model. This is intentional for three reasons:
+
+  Availability: The response is returned even if all LLM providers are
+  offline. Infrastructure failures cannot disable emergency messaging.
+
+  Consistency: The response is always the same — no variation, no hedging,
+  no ambiguity. Users in distress need clear, direct instructions.
+
+  Speed: A hard-coded string is returned in under 50 milliseconds,
+  regardless of system load.
+
+  The response includes: a clear statement that the symptoms require
+  immediate attention, the Egyptian emergency services number (123),
+  and an instruction not to wait to see if symptoms improve.
+
+
+================================================================================
+  CHAPTER 4
+  Conversation Memory
+================================================================================
+
+  What Memory Means in This Context
+  ────────────────────────────────────
+
+  Rafeeq maintains a record of what has been said in each conversation. Every
+  user message and every assistant response is stored in a session-specific
+  memory. When a new message arrives, the full conversation history is included
+  in the prompt so the model knows what was discussed earlier.
+
+  This makes follow-up questions work naturally. If Rafeeq gave advice about
+  headaches in one turn, and the user then asks "مقولتليش على نصايح", the
+  model has access to what it said and can reference the specific advice
+  rather than generating generic new advice.
+
+
+  The Technical Problem This Solves
+  ───────────────────────────────────
+
+  An earlier version of the system stored conversation history as a single
+  block of plain text inside a system instruction:
+
+      (system message)
+      "المستخدم: عندي صداع
+       رفيق: اشرب ميه وابعد عن الشاشات وخد راحة"
+
+  The model read this as instructions or background notes — not as a
+  conversation it had participated in. When a user asked a follow-up question,
+  the model treated the history as a description of a hypothetical conversation
+  rather than its own prior responses.
+
+  The current approach injects each turn as an actual message in the
+  conversation structure:
+
+      (human message)    "عندي صداع"
+      (assistant reply)  "اشرب ميه وابعد عن الشاشات وخد راحة..."
+      (human message)    "مقولتليش على نصايح"   <-- current question
+
+  The model now recognizes these as turns in a real conversation it
+  participated in, and references its previous responses accurately.
+
+
+  Storage Architecture
+  ─────────────────────
+
+  Every session's conversation is stored in two layers:
+
+  Primary — Redis
+      Persistent storage that survives server restarts. Conversations are
+      kept for 24 hours after the last message. Enables future horizontal
+      scaling where multiple server instances share the same session store.
+
+  Backup — In-process cache
+      Holds up to 500 active sessions in memory for one hour. Avoids a
+      Redis network round-trip on every message for active conversations.
+      If Redis is unavailable, this layer continues to function — memory
+      works for the duration of the session but does not persist across
+      server restarts.
+
+
+  History Compression
+  ────────────────────
+
+  When a conversation exceeds 10 turns, the oldest turns are summarized
+  into a compact text block and removed from the active message list. Only
+  the 6 most recent turns remain as full messages.
+
+  This prevents the conversation history from eventually exceeding the
+  language model's context window, which would cause the oldest messages
+  to be silently dropped or the request to fail entirely.
+
+  The summary is injected into the prompt as a background note — not as an
+  assistant message. If it were injected as an assistant message, the model
+  would treat it as something it said in the conversation and might try to
+  maintain consistency with it in unintended ways.
+
+
+  Duplicate Prevention
+  ─────────────────────
+
+  Before saving any message, the system checks whether the same content
+  from the same role already appears in the last three turns. If it does,
+  the save is skipped. This prevents double-saving that can occur if multiple
+  code paths attempt to write the same message.
+
+
+================================================================================
+  CHAPTER 5
+  Real-Time Streaming
+================================================================================
+
+  Why Streaming Matters
+  ──────────────────────
+
+  A language model generates text one small unit (token) at a time. Without
+  streaming, the system would wait for the entire response to finish generating
+  before sending anything — typically 3-6 seconds of silence. With streaming,
+  the user sees the first word in under one second and reads the response as
+  it is being written, which feels significantly more responsive and natural.
+
+
+  The Word Fragmentation Problem
+  ──────────────────────────────
+
+  Language models operate on tokens, which are subword units. A single
+  Arabic word is often split across multiple tokens during generation. The
+  word "الصداع" (headache) might be emitted as three separate tokens:
+  "ال" then "صد" then "اع".
+
+  If each token is delivered to the client the moment it arrives, the user
+  sees text appear in broken fragments — or sees spaces appear mid-word,
+  turning "الصداع" into "ال صد اع". This makes the streaming experience
+  feel broken and unprofessional.
+
+
+  The Solution — Word-Boundary Buffering
+  ────────────────────────────────────────
+
+  Incoming tokens are accumulated in a buffer. The buffer is only flushed
+  — sent to the client — when a safe boundary character is reached. Safe
+  boundaries are: spaces, newline characters, and punctuation marks such as
+  commas, periods, and question marks.
+
+  This guarantees that only complete words are delivered to the client. A
+  word that spans multiple tokens is held in the buffer until the final token
+  arrives (identifiable by the space that follows it in the generated text).
+  The text content is never modified — only the timing of delivery changes.
+
+
+  Batch Delivery — Reducing Network Overhead
+  ───────────────────────────────────────────
+
+  Even with word-boundary buffering, individual Arabic words are only 4-8
+  characters each. Sending one word per network frame means hundreds of
+  separate WebSocket writes per response — each write involves a system call,
+  network transmission, and a re-render in the browser.
+
+  A second buffering layer at the delivery level accumulates words until
+  approximately 40 characters are ready, then sends them as a single frame.
+  This reduces WebSocket writes by roughly 70% with no perceptible difference
+  in streaming smoothness for the user.
+
+
+  Connection Reliability — Keepalive
+  ────────────────────────────────────
+
+  Many network components — load balancers, proxies, mobile network gateways
+  — close idle TCP connections after 30-60 seconds. A user who pauses mid-
+  conversation would silently lose their WebSocket connection without any
+  visible error, and their next message would fail.
+
+  The server sends a ping frame to every active WebSocket connection every
+  30 seconds. This keeps the TCP connection alive and allows the client to
+  detect quickly if the server becomes unavailable.
+
+
+================================================================================
+  CHAPTER 6
+  API Reference
+================================================================================
+
+  BASE URL
+  ─────────
+
+  http://localhost:8000
+
+
+  ENDPOINTS OVERVIEW
+  ──────────────────
+
+  ┌─────────┬──────────────┬──────────────┬───────────────────────────────────┐
+  │ Method  │ Path         │ Transport    │ Purpose                           │
+  ├─────────┼──────────────┼──────────────┼───────────────────────────────────┤
+  │ POST    │ /chat        │ HTTP         │ Send a question, receive streaming │
+  │ WS      │ /chat/ws     │ WebSocket    │ Real-time bidirectional chat       │
+  │ POST    │ /chat/new    │ HTTP         │ Clear session memory               │
+  │ GET     │ /health      │ HTTP         │ Server status and active WS count  │
+  │ GET     │ /            │ HTTP         │ Basic status and version check     │
+  └─────────┴──────────────┴──────────────┴───────────────────────────────────┘
+
+
+  POST /chat — HTTP Streaming
+  ────────────────────────────
+
+  Send a question and receive the answer as a stream of text. The connection
+  stays open until the full response is delivered. The session ID is returned
+  in the X-Session-ID response header.
+
+  Request body:
+
+      {
+        "question":   "ما أسباب الصداع المستمر؟",
+        "session_id": "user_123"
+      }
+
+  The session_id field is optional. If omitted, a new session is created.
+
+  The response arrives as a continuous stream of plain text chunks, not as a
+  single JSON object. The client reads it progressively as it arrives.
+
+
+  WebSocket /chat/ws — Real-Time Chat
+  ─────────────────────────────────────
+
+  Connect once and send multiple messages within the same session. The server
+  sends response chunks as they are generated, followed by a completion signal.
+
+  Client sends:
+
+      {
+        "question":   "عندي صداع من امبارح",
+        "session_id": "user_123"
+      }
+
+  Server responds with a sequence of messages:
+
+      Response chunk (one of many):
+      {
+        "type":       "chunk",
+        "content":    "متقلقش — الصداع شائع جدا...",
+        "session_id": "user_123"
+      }
+
+      Completion signal (final message):
+      {
+        "type":       "done",
+        "session_id": "user_123"
+      }
+
+  Other messages the server may send:
+
+      Keepalive (every 30 seconds):
+      { "type": "ping" }
+
+      Error:
+      { "type": "error", "error": "stream_failed" }
+
+  The client should respond to ping messages with:
+      { "type": "pong" }
+
+
+  POST /chat/new — Clear Session Memory
+  ──────────────────────────────────────
+
+  Clears the conversation history for a session. This is called by the
+  frontend "New Conversation" button.
+
+  Request body:
+
+      { "session_id": "user_123" }
+
+  Response:
+
+      { "success": true, "session_id": "user_123" }
+
+
+  GET /health — Health Check
+  ──────────────────────────
+
+  Response:
+
+      {
+        "status":         "healthy",
+        "ws_connections": 4
+      }
+
+
+================================================================================
+  CHAPTER 7
+  Performance
+================================================================================
+
+  Response Latency by Stage
+  ──────────────────────────
+
+  ┌──────────────────────────────────────────┬──────────────┐
+  │ Stage                                    │ Typical Time │
+  ├──────────────────────────────────────────┼──────────────┤
+  │ Quick response (greeting / identity)     │ Under 1ms    │
+  │ Cache hit                                │ ~10ms        │
+  │ Emergency response                       │ ~50ms        │
+  │ Parallel tasks (after warmup)            │ 20 – 80ms    │
+  │ First token from LLM                     │ 400 – 900ms  │
+  │ Full response delivery                   │ 2 – 6s       │
+  │ First request after cold start           │ 30 – 35s     │
+  └──────────────────────────────────────────┴──────────────┘
+
+
+  The Cold Start Problem and Its Solution
+  ─────────────────────────────────────────
+
+  The embedding model — the component that converts text into mathematical
+  vectors for semantic search — takes approximately 30 seconds to load into
+  memory on first use. Without intervention, the first user request after
+  deployment would trigger this load and appear to time out.
+
+  The application runs a warmup sequence during startup that pre-loads all
+  heavy components before the server accepts any traffic. After warmup, the
+  first-token latency drops from 30 seconds to under one second.
+
+  The warmup sequence covers: the medical classification brain, the embedding
+  model and Qdrant connection, and a test LLM streaming call to confirm the
+  provider is reachable.
+
+
+  Caching Impact
+  ──────────────
+
+  In typical usage patterns, approximately 60-80% of requests after the first
+  few interactions are served from cache. Each cache hit eliminates a document
+  retrieval call, a classification call, a fallback lookup, and an LLM API
+  call. The cache is the single largest contributor to reducing both latency
+  and API cost in production.
+
+
+  Parallel Execution Impact
+  ──────────────────────────
+
+  Running the four background tasks (classification, retrieval, fallback
+  lookup, memory loading) in parallel rather than sequentially reduces this
+  phase from 3-6 seconds to the time of the slowest task — typically under
+  100 milliseconds after the embedding model is loaded. This is the second
+  largest latency improvement in the system after caching.
+
+
+================================================================================
+  CHAPTER 8
+  When Things Go Wrong — Fault Tolerance
+================================================================================
+
+  The system is designed to remain functional when individual components fail.
+  No single component failure causes a complete outage.
+
+  ┌──────────────────────┬──────────────────────────────────────────────────┐
+  │ Component            │ What Happens When It Fails                       │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Redis                │ Falls back to in-process cache. Memory works     │
+  │                      │ for the session duration but does not persist    │
+  │                      │ across server restarts.                          │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Qdrant               │ Retrieval returns empty. The prompt is built     │
+  │                      │ without grounding context. The LLM generates     │
+  │                      │ from training knowledge only.                    │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Groq (primary LLM)   │ LLM Manager automatically tries Gemini.         │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ Gemini               │ LLM Manager automatically tries OpenRouter.      │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ All LLM providers    │ Pre-written SafeFallback response returned if    │
+  │                      │ one exists for this query type. Otherwise a      │
+  │                      │ static error message is shown.                   │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ MedicalAIBrain       │ Returns safe default values: emergency = false,  │
+  │                      │ severity = low. Emergency regex still runs       │
+  │                      │ independently — safety is not affected.          │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ SmartCache           │ Read/write errors are silently skipped and       │
+  │                      │ logged. Response generates normally.             │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ WebSocket disconnect │ Stream abandoned cleanly. No crash. Partial      │
+  │ mid-response         │ response is not saved to memory.                 │
+  └──────────────────────┴──────────────────────────────────────────────────┘
+
+  One component is explicitly designed to be failure-proof:
+
+  The emergency regex (Layer 1 of the safety system) is a pure function with
+  no external dependencies — no database, no AI model, no network call.
+  It operates on the raw input text alone and will function correctly even
+  when every other component in the system is unavailable.
+
+
+================================================================================
+  CHAPTER 9
+  Deployment and Configuration
+================================================================================
+
+  Running the System
+  ───────────────────
+
+  The entire system runs as three Docker containers managed by Docker Compose.
+  No manual setup of databases or services is required.
+
+  Step 1 — Clone the repository
+      git clone https://github.com/your-username/rafeeq-ai.git
+      cd rafeeq-ai
+
+  Step 2 — Create the environment file
+      cp .env.example .env
+      (then edit .env with your API keys)
+
+  Step 3 — Start all services
+      docker compose up --build
+
+  Services started:
+
+      FastAPI application  →  http://localhost:8000
+      Qdrant vector DB     →  http://localhost:6333
+      Redis session store  →  localhost:6379
+
+
+  Environment Variables
+  ──────────────────────
+
+  At least one LLM provider key is required. If none are provided, the
+  application will refuse to start with a clear error message.
+
+  ┌─────────────────────┬────────────────┬──────────────┬───────────────────┐
+  │ Variable            │ Required       │ Default      │ Description       │
+  ├─────────────────────┼────────────────┼──────────────┼───────────────────┤
+  │ GROQ_API_KEY        │ One of three   │ —            │ Groq API key      │
+  │ GOOGLE_API_KEY      │ One of three   │ —            │ Gemini API key    │
+  │ OPENROUTER_API_KEY  │ One of three   │ —            │ OpenRouter key    │
+  │ REDIS_HOST          │ No             │ redis        │ Redis hostname    │
+  │ REDIS_PORT          │ No             │ 6379         │ Redis port        │
+  │ QDRANT_HOST         │ No             │ qdrant       │ Qdrant hostname   │
+  │ QDRANT_PORT         │ No             │ 6333         │ Qdrant port       │
+  │ QDRANT_URL          │ No             │ auto-built   │ Full Qdrant URL   │
+  │ QDRANT_COLLECTION   │ No             │ medical_rag  │ Collection name   │
+  │ ALLOWED_ORIGINS     │ No             │ localhost    │ CORS origins      │
+  │ DEBUG               │ No             │ false        │ Verbose logging   │
+  └─────────────────────┴────────────────┴──────────────┴───────────────────┘
+
+  Note on QDRANT_URL: if this variable is set, it takes priority over
+  QDRANT_HOST and QDRANT_PORT. Cloud deployments can supply a full URL
+  directly; Docker Compose deployments can leave it unset and use the
+  default host/port pair.
+
+
+================================================================================
+  CHAPTER 10
+  Limitations and Roadmap
+================================================================================
+
+  Current Limitations
+  ────────────────────
+
+  No fine-tuned medical model
+      The system uses general-purpose language models guided by prompting
+      and retrieved context. A model specifically trained on Arabic medical
+      data would improve accuracy, particularly for rare conditions and
+      highly technical clinical questions.
+
+  External LLM dependency
+      All response generation requires a working API connection to Groq,
+      Gemini, or OpenRouter. Offline operation beyond pre-written fallback
+      responses is not currently supported.
+
+  Rule-based emergency detection
+      Layer 1 emergency detection uses hand-crafted patterns. It covers
+      common Egyptian Arabic phrasings of emergency symptoms but may miss
+      unusual descriptions, formal Arabic phrasing, or symptoms expressed
+      indirectly. The AI layers (2, 3, 4) provide additional coverage but
+      are not a complete substitute for medical training.
+
+  Arabic NLP edge cases
+      The normalization layer handles common Arabic letter variants but
+      not all dialectal spelling variations. Queries with uncommon spelling
+      may fail to retrieve relevant documents even when the content exists.
+
+  Dataset coverage
+      Retrieval quality depends entirely on the content in the Qdrant
+      database. Questions about topics not represented in the indexed
+      documents are answered from model knowledge alone — without retrieval
+      grounding.
+
+  No user authentication
+      Users are identified by session ID only. There is no login, no user
+      profile, and no access control.
+
+  Session data not encrypted
+      Redis stores conversation history in plain JSON. For any deployment
+      beyond a private network, Redis should be configured with
+      authentication and the data should be treated as sensitive.
+
+
+  Roadmap — Planned Improvements
+  ───────────────────────────────
+
+  Fine-tuned Arabic medical language model
+      Replace general-purpose models with a model specifically trained
+      on Arabic medical literature and conversations.
+
+  Medical knowledge graph integration
+      Supplement vector search with structured clinical knowledge for
+      improved reasoning about symptoms, conditions, and relationships.
+
+  Voice interface
+      Add speech-to-text for spoken Arabic queries — important for users
+      who are not comfortable typing or who are in distress.
+
+  Authentication and user management
+      JWT-based authentication, user profiles, and access control for
+      multi-tenant deployments.
+
+  Observability
+      Prometheus metrics and Grafana dashboards for monitoring response
+      latency, cache hit rates, error rates, and provider availability.
+
+  Kubernetes deployment
+      Horizontal scaling support for high-traffic deployments.
+
+  Distributed session store
+      Redis Cluster configuration for multi-instance session sharing.
+
+
+================================================================================
+
+                             END OF DOCUMENT
+
+  Rafeeq AI  —  Built for Arabic-speaking users seeking medical guidance.
+  Mohamed Ramzy  &  Mohamed Reda  —  AI Engineering Students.
+
+  Educational and research use only.
+  Not intended for clinical or medical diagnosis.
+
+================================================================================

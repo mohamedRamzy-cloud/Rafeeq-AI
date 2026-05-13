@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+venv
+.env
+.git
+.gitignore
+medical_dataset.parquet
+medical_dataset_clean.json

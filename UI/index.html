@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+
+    <meta charset="UTF-8" />
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    />
+
+    <title>Rafeeq AI</title>
+
+    <!-- FONT -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+
+    <link
+        rel="preconnect"
+        href="https://fonts.gstatic.com"
+        crossorigin
+    >
+
+    <link
+        href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet"
+    >
+
+    <link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<div class="app">
+
+    <!-- ========================= -->
+    <!-- SIDEBAR -->
+    <!-- ========================= -->
+    <aside class="sidebar">
+
+        <div class="sidebar-top">
+
+            <div class="logo">
+
+                <div class="logo-icon">
+                    🧠
+                </div>
+
+                <div class="logo-text">
+                    <h2>Rafeeq</h2>
+                    <p>Medical AI Assistant</p>
+                </div>
+
+            </div>
+
+            <button
+                class="new-chat-btn"
+                onclick="newChat()"
+            >
+                + محادثة جديدة
+            </button>
+
+        </div>
+
+        <!-- HISTORY -->
+        <div
+            class="history"
+            id="history"
+        ></div>
+
+        <!-- SIDEBAR FOOTER -->
+        <div class="sidebar-footer">
+
+            <button
+                class="sidebar-btn"
+                onclick="toggleTheme()"
+            >
+                🌙 الوضع الداكن
+            </button>
+
+            <button
+                class="sidebar-btn"
+                onclick="toggleDebug()"
+            >
+                🐞 Debug
+            </button>
+
+        </div>
+
+    </aside>
+
+    <!-- ========================= -->
+    <!-- MAIN -->
+    <!-- ========================= -->
+    <main class="main">
+
+        <!-- ========================= -->
+        <!-- TOP BAR -->
+        <!-- ========================= -->
+        <header class="topbar">
+
+            <div class="topbar-left">
+
+                <div class="topbar-logo">
+                    🧠
+                </div>
+
+                <div class="topbar-text">
+                    <h2>Rafeeq</h2>
+                    <p>Medical AI Assistant</p>
+                </div>
+
+            </div>
+
+        </header>
+
+        <!-- ========================= -->
+        <!-- HERO -->
+        <!-- ========================= -->
+        <section
+            class="hero"
+            id="hero"
+        >
+
+            <div class="hero-content">
+
+                <div class="hero-badge">
+                    AI Medical Assistant
+                </div>
+
+                <h1 class="hero-title">
+                    رفيق
+                </h1>
+
+                <p class="hero-subtitle">
+                    مساعد طبي ذكي يساعدك على فهم الأعراض بشكل بسيط وآمن
+                </p>
+
+            </div>
+
+        </section>
+
+        <!-- ========================= -->
+        <!-- CHAT -->
+        <!-- ========================= -->
+        <section
+            class="chat-box"
+            id="chat-box"
+        ></section>
+
+        <!-- ========================= -->
+        <!-- INPUT -->
+        <!-- ========================= -->
+        <div class="input-wrapper">
+
+            <div class="input-area">
+
+                <button
+                    class="icon-btn"
+                    onclick="startVoice()"
+                    title="Voice"
+                >
+                    🎤
+                </button>
+
+                <input
+                    id="input"
+                    type="text"
+                    placeholder="اكتب سؤالك الطبي هنا..."
+                    autocomplete="off"
+                />
+
+                <button
+                    id="sendBtn"
+                    class="send-btn"
+                    onclick="sendMessage()"
+                >
+                    إرسال
+                </button>
+
+            </div>
+
+        </div>
+
+    </main>
+
+</div>
+
+<!-- ========================= -->
+<!-- DEBUG PANEL -->
+<!-- ========================= -->
+<div id="debug-panel">
+
+    <div class="debug-title">
+        DEBUG LOGS
+    </div>
+
+    <div id="debug-content"></div>
+
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>
