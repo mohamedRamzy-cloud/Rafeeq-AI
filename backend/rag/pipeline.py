@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -12,14 +14,14 @@ from backend.llm.manager import LLMManager
 from backend.memory.memory import ProMemory
 from backend.rag.smart_cache import SmartCache
 from backend.rag.fallback_model import SafeFallback
-from backend.rag.utils import clean_input, clean_output, enforce_specialty
+from backend.rag.utils import clean_input, clean_output, enforce_specialty, StreamingOutputCleaner
 
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════
-# INIT — singletons created once at import time
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+# SINGLETONS
+# ══════════════════════════════════════════════════════════════
 brain    = MedicalAIBrain()
 router   = ResponseRouter()
 llm      = LLMManager()
@@ -30,9 +32,9 @@ fallback = SafeFallback()
 executor = ThreadPoolExecutor(max_workers=4)
 
 
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # QUICK RESPONSES
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 QUICK_RESPONSES: dict[str, str] = {
     "السلام عليكم":                        "وعليكم السلام ورحمة الله وبركاته 🌷",
     "سلام عليكم":                          "وعليكم السلام ورحمة الله وبركاته 🌷",
@@ -81,10 +83,10 @@ QUICK_RESPONSES: dict[str, str] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # NORMALIZATION
-# ═══════════════════════════════════════════════════════════
-def norm(text: str) -> str:
+# ══════════════════════════════════════════════════════════════
+def _norm(text: str) -> str:
     if not text:
         return ""
     text = text.lower().strip()
@@ -92,13 +94,12 @@ def norm(text: str) -> str:
         text = text.replace(old, new)
     text = re.sub(r"[^\w\s\u0600-\u06FF]", " ", text)
     text = re.sub(r"(.)\1{3,}", r"\1", text)
-    text = " ".join(text.split())
-    return text
+    return " ".join(text.split())
 
 
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # EMERGENCY
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 _EMERGENCY_RE = re.compile(
     r"الم.*صدر|صدر.*الم|وجع.*صدر|صدر.*وجع"
     r"|ضيق.*صدر|صدر.*ضيق"
@@ -124,46 +125,43 @@ _EMERGENCY_REPLY = (
 
 def _is_emergency(question: str, analysis: dict, route: str) -> bool:
     if _EMERGENCY_RE.search(question):
-        logger.warning("[EMERGENCY] keyword match on: %.60s", question)
+        logger.warning("[EMERGENCY] keyword match: %.60s", question)
         return True
     if analysis.get("emergency"):
-        logger.warning("[EMERGENCY] brain.analyze flagged emergency")
+        logger.warning("[EMERGENCY] brain flagged emergency")
         return True
     if route == "emergency":
-        logger.warning("[EMERGENCY] router returned emergency route")
+        logger.warning("[EMERGENCY] router returned emergency")
         return True
     if analysis.get("severity") == "high":
-        logger.warning("[EMERGENCY] brain.analyze flagged severity=high")
+        logger.warning("[EMERGENCY] severity=high")
         return True
     return False
 
 
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # WEAK RESPONSE DETECTOR
-# ═══════════════════════════════════════════════════════════
-_WEAK_PATTERNS = re.compile(
+# ══════════════════════════════════════════════════════════════
+_WEAK_RE = re.compile(
     r"لا استطيع|لا يمكنني|غير قادر|حدث خطا|error|exception",
     re.IGNORECASE,
 )
 
-
 def _is_weak(text: str) -> bool:
-    if not text or len(text.strip()) < 20:
-        return True
-    return bool(_WEAK_PATTERNS.search(text))
+    return not text or len(text.strip()) < 20 or bool(_WEAK_RE.search(text))
 
 
-# ═══════════════════════════════════════════════════════════
-# ANALYSIS RESULT VALIDATOR
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+# ANALYSIS VALIDATOR
+# ══════════════════════════════════════════════════════════════
 _VALID_ROUTES = {"normal", "emergency", "followup", "clarify", "rag"}
 
 _ANALYSIS_DEFAULTS: dict = {
     "emergency": False,
-    "specialty": "general",
-    "intent": "general_question",
+    "specialty": None,
+    "intent":    "general_question",
     "needs_rag": True,
-    "severity": "low",
+    "severity":  "low",
 }
 
 
@@ -176,13 +174,15 @@ def _validate_analysis(raw) -> dict:
     result["emergency"] = bool(result["emergency"])
     result["needs_rag"] = bool(result["needs_rag"])
     result["severity"]  = str(result["severity"]).lower()
-    result["specialty"] = str(result["specialty"]).lower() or "general"
+    
+    specialty = str(result["specialty"] or "").strip().lower()
+    result["specialty"] = specialty if specialty and specialty != "general" else None
     return result
 
 
-# ═══════════════════════════════════════════════════════════
-# CACHE GUARD
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+# CACHE HELPERS
+# ══════════════════════════════════════════════════════════════
 _MIN_CACHE_LEN = 15
 
 
@@ -192,7 +192,7 @@ def _cache_get(key: str) -> str | None:
         if isinstance(value, str) and len(value) >= _MIN_CACHE_LEN:
             return value
         if value is not None:
-            logger.debug("[CACHE] evicting short/invalid entry for key=%s", key)
+            logger.debug("[CACHE] evicting short entry key=%s", key)
             cache.delete(key)
     except Exception as exc:
         logger.warning("[CACHE GET] %s", exc)
@@ -208,9 +208,14 @@ def _cache_set(key: str, value: str) -> None:
         logger.warning("[CACHE SET] %s", exc)
 
 
-# ═══════════════════════════════════════════════════════════
+
+def _make_cache_key(question: str) -> str:
+    return f"q:{question}"
+
+
+# ══════════════════════════════════════════════════════════════
 # SAFE FUTURE
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 def _safe_future(future, key: str, timeout: float = 8.0):
     try:
         return future.result(timeout=timeout)
@@ -219,13 +224,12 @@ def _safe_future(future, key: str, timeout: float = 8.0):
         return None
 
 
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # PARALLEL WORKERS
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 def _analysis_fn(question: str) -> dict:
     try:
-        raw = brain.analyze(question)
-        return _validate_analysis(raw)
+        return _validate_analysis(brain.analyze(question))
     except Exception as exc:
         logger.exception("[ANALYSIS ERROR] %s", exc)
         return dict(_ANALYSIS_DEFAULTS)
@@ -262,15 +266,15 @@ def _memory_fn(session_id: str) -> list:
         return []
 
 
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # ROUTE VALIDATOR
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 def _safe_route(analysis: dict, question: str) -> str:
     try:
         route = router.route(analysis, question)
         route = str(route).lower().strip() if route else "normal"
         if route not in _VALID_ROUTES:
-            logger.warning("[ROUTER] unknown route '%s' → using 'normal'", route)
+            logger.warning("[ROUTER] unknown route '%s' → 'normal'", route)
             return "normal"
         return route
     except Exception as exc:
@@ -278,22 +282,9 @@ def _safe_route(analysis: dict, question: str) -> str:
         return "normal"
 
 
-# ═══════════════════════════════════════════════════════════
-# STREAM BUFFER — word-boundary flush
-# ═══════════════════════════════════════════════════════════
-_BOUNDARY_RE = re.compile(r'^(.*[\s\n،,\.؟?!:;\-–—])(.*?)$', re.DOTALL)
-
-
-def _flush_words(buf: str) -> tuple[str, str]:
-    m = _BOUNDARY_RE.match(buf)
-    if m:
-        return m.group(1), m.group(2)
-    return "", buf
-
-
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # POST-PROCESS
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 def _post_process(text: str) -> str:
     if not text:
         return ""
@@ -303,14 +294,10 @@ def _post_process(text: str) -> str:
     return text.strip()
 
 
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # MAIN PIPELINE
-# ═══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 def run_pipeline(question: str, session_id: str):
-    """
-    Main generator — yields text chunks to the caller (streaming).
-    Every yield must be a clean, complete-word string.
-    """
     try:
         # ── 0. Input sanitation ───────────────────────────
         question = clean_input(question)
@@ -318,21 +305,22 @@ def run_pipeline(question: str, session_id: str):
             yield "اتفضل اكتب استفسارك 🌷"
             return
 
-        normalized = norm(question)
+        normalized = _norm(question)
 
         # ── 1. Quick reply ────────────────────────────────
         if normalized in QUICK_RESPONSES:
             yield QUICK_RESPONSES[normalized]
             return
 
-        # ── 2. Emergency keyword check ────────────────────
+        # ── 2. Emergency keyword check (early exit) ───────
         if _EMERGENCY_RE.search(question):
-            logger.warning("[EMERGENCY] early keyword match — aborting to reply")
+            logger.warning("[EMERGENCY] early keyword match")
             yield _EMERGENCY_REPLY
             return
 
         # ── 3. Cache ──────────────────────────────────────
-        cache_key = f"{session_id}:{normalized}"
+        
+        cache_key = _make_cache_key(normalized)
         cached    = _cache_get(cache_key)
         if cached:
             logger.info("[CACHE HIT ✔]")
@@ -346,6 +334,7 @@ def run_pipeline(question: str, session_id: str):
             logger.warning("[MEMORY ADD user] %s", exc)
 
         # ── 5. Parallel tasks ─────────────────────────────
+        
         futures = {
             "analysis":  executor.submit(_analysis_fn,  question),
             "retrieval": executor.submit(_retrieval_fn, question),
@@ -353,7 +342,7 @@ def run_pipeline(question: str, session_id: str):
             "memory":    executor.submit(_memory_fn,    session_id),
         }
         results = {
-            k: _safe_future(v, k, timeout=35.0 if k == "retrieval" else 8.0)
+            k: _safe_future(v, k, timeout=12.0 if k == "retrieval" else 8.0)
             for k, v in futures.items()
         }
 
@@ -371,6 +360,7 @@ def run_pipeline(question: str, session_id: str):
             return
 
         # ── 8. Build prompt ───────────────────────────────
+        
         try:
             prompt   = build_prompt(
                 question=question,
@@ -378,7 +368,6 @@ def run_pipeline(question: str, session_id: str):
                 fallback_context=fallback_response,
                 memory_messages=memory_messages,
                 emergency=False,
-                first_message=(len(memory_messages) == 0),
             )
             messages = prompt.format_messages()
         except Exception as exc:
@@ -387,59 +376,49 @@ def run_pipeline(question: str, session_id: str):
             return
 
         # ── 9. LLM stream ─────────────────────────────────
-        raw_buffer  = ""
-        word_buffer = ""
-        has_output  = False
-        MIN_CHUNK   = 30
+        
+        cleaner    = StreamingOutputCleaner()
+        raw_buffer = ""
+        has_output = False
 
         try:
-            stream = llm.stream(messages, route)
-            if not stream:
-                raise ValueError("llm.stream() returned empty/None")
-
-            for chunk in stream:
+            for chunk in llm.stream(messages, route):
                 if not chunk:
                     continue
 
-                word_buffer += str(chunk)
-
-                if len(word_buffer) >= MIN_CHUNK:
-                    to_yield, word_buffer = _flush_words(word_buffer)
-                    if to_yield:
-                        raw_buffer += to_yield
-                        has_output  = True
-                        yield to_yield
-
-            # فلش الباقي في الآخر
-            if word_buffer:
-                raw_buffer += word_buffer
+                raw_buffer += str(chunk)
                 has_output  = True
-                yield word_buffer
+
+                cleaned = cleaner.feed(chunk)
+                if cleaned:
+                    yield cleaned
+
+            
+            remainder = cleaner.flush()
+            if remainder:
+                yield remainder
 
             if not has_output:
                 raise ValueError("Stream produced no output")
 
         except Exception as exc:
             logger.exception("[LLM STREAM ERROR] %s", exc)
-            if fallback_response:
-                yield fallback_response
-                return
-            yield "الخدمة مشغولة حاليًا، حاول مرة تانية بعد شوية."
+            yield fallback_response or "الخدمة مشغولة حاليًا، حاول مرة تانية بعد شوية."
             return
 
-        # ── 10. Post-process ──────────────────────────────
+        # ── 10. Post-process & specialty ─────────────────
         final_response = _post_process(clean_output(raw_buffer))
 
         if _is_weak(final_response) and fallback_response:
             final_response = fallback_response
 
-        try:
-            final_response = enforce_specialty(
-                final_response,
-                analysis.get("specialty", "general"),
-            )
-        except Exception as exc:
-            logger.warning("[ENFORCE SPECIALTY] %s", exc)
+        
+        specialty = analysis.get("specialty")
+        if specialty:
+            try:
+                final_response = enforce_specialty(final_response, specialty)
+            except Exception as exc:
+                logger.warning("[ENFORCE SPECIALTY] %s", exc)
 
         if not final_response:
             final_response = fallback_response or "حاول مرة تانية بعد شوية."

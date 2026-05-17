@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 import asyncio
 import inspect
@@ -13,24 +14,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from backend.core.config import settings
 from backend.services.chat_service import ChatService
 from backend.api.schemas import ChatRequest
-
 from backend.rag.pipeline import brain, llm, memory
 from backend.rag.preprocessing_query import preprocess_query
 from backend.rag.retrieval import retrieve
 
-
-# ═══════════════════════════════════════════════════════════
-# CONFIG
-# ═══════════════════════════════════════════════════════════
 WS_RECEIVE_TIMEOUT = 300
 WS_PING_INTERVAL   = 30
-STREAM_BATCH_CHARS = 100
 HTTP_STREAM_MEDIA  = "text/plain; charset=utf-8"
 
-
-# ═══════════════════════════════════════════════════════════
-# LOGGING
-# ═══════════════════════════════════════════════════════════
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -38,20 +29,17 @@ logging.basicConfig(
 logger = logging.getLogger("rafeeq-api")
 
 
-# ═══════════════════════════════════════════════════════════
-# CONNECTION REGISTRY
-# ═══════════════════════════════════════════════════════════
 class _ConnectionRegistry:
     def __init__(self):
         self._conns: dict[str, WebSocket] = {}
 
-    def add(self, cid: str, ws: WebSocket):
+    def add(self, cid: str, ws: WebSocket) -> None:
         self._conns[cid] = ws
 
-    def remove(self, cid: str):
+    def remove(self, cid: str) -> None:
         self._conns.pop(cid, None)
 
-    async def close_all(self):
+    async def close_all(self) -> None:
         for ws in list(self._conns.values()):
             try:
                 await ws.close(code=1001)
@@ -67,62 +55,63 @@ class _ConnectionRegistry:
 registry = _ConnectionRegistry()
 
 
-# ═══════════════════════════════════════════════════════════
-# WARMUP
-# ═══════════════════════════════════════════════════════════
-async def _warmup():
+class _LazyWarmup:
+    
+    def __init__(self):
+        self._done  = False
+        self._lock  = asyncio.Lock()
 
-    loop = asyncio.get_event_loop()
+    async def run_once(self) -> None:
+        if self._done:
+            return
+        async with self._lock:
+            if self._done:
+                return
+            await self._do_warmup()
+            self._done = True
 
-    # ── 1. Brain ─────────────────────────────────────────
-    try:
-        await loop.run_in_executor(None, brain.analyze, "عندي صداع خفيف")
-        logger.info("[WARMUP] brain ✔")
-    except Exception as exc:
-        logger.warning("[WARMUP] brain failed: %s", exc)
+    async def _do_warmup(self) -> None:
+        loop = asyncio.get_event_loop()
 
-    # ── 2. Embeddings + Qdrant ───────────────────────────
-    def _retrieval_warmup():
-        q = preprocess_query("ما هو الصداع")
-        retrieve(q, k=1)
+        try:
+            await loop.run_in_executor(None, brain.analyze, "عندي صداع خفيف")
+            logger.info("[WARMUP] brain ✔")
+        except Exception as exc:
+            logger.warning("[WARMUP] brain failed: %s", exc)
 
-    try:
-        await loop.run_in_executor(None, _retrieval_warmup)
-        logger.info("[WARMUP] retrieval ✔")
-    except Exception as exc:
-        logger.warning("[WARMUP] retrieval failed: %s", exc)
+        try:
+            def _retrieval():
+                q = preprocess_query("ما هو الصداع")
+                retrieve(q, k=1)
+            await loop.run_in_executor(None, _retrieval)
+            logger.info("[WARMUP] retrieval ✔")
+        except Exception as exc:
+            logger.warning("[WARMUP] retrieval failed: %s", exc)
 
-    # ── 3. LLM ───────────────────────────────────────────
-    def _llm_warmup():
-        stream = llm.stream([{"role": "user", "content": "قل مرحبا"}], "normal")
-        for _ in stream:
-            break
+        try:
+            def _llm():
+                for _ in llm.stream([{"role": "user", "content": "قل مرحبا"}], "normal"):
+                    break
+            await loop.run_in_executor(None, _llm)
+            logger.info("[WARMUP] llm ✔")
+        except Exception as exc:
+            logger.warning("[WARMUP] llm failed: %s", exc)
 
-    try:
-        await loop.run_in_executor(None, _llm_warmup)
-        logger.info("[WARMUP] llm ✔")
-    except Exception as exc:
-        logger.warning("[WARMUP] llm failed: %s", exc)
-
-    logger.info("[WARMUP] all components ready ✔")
+        logger.info("[WARMUP] done ✔")
 
 
-# ═══════════════════════════════════════════════════════════
-# LIFESPAN
-# ═══════════════════════════════════════════════════════════
+_warmup = _LazyWarmup()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(" Rafeeq API starting")
-    await _warmup()
+    logger.info("Rafeeq API starting")
     yield
-    logger.info(" Shutting down — %d active WS", registry.count)
+    logger.info("Shutting down — %d active WS", registry.count)
     await registry.close_all()
-    logger.info("✅ Shutdown complete")
+    logger.info("Shutdown complete ✔")
 
 
-# ═══════════════════════════════════════════════════════════
-# APP
-# ═══════════════════════════════════════════════════════════
 app = FastAPI(
     title="Rafeeq Medical API",
     version="1.0.0",
@@ -130,29 +119,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
-# ═══════════════════════════════════════════════════════════
-# CORS — من settings مش hard-coded
-# ═══════════════════════════════════════════════════════════
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,   
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# ═══════════════════════════════════════════════════════════
-# SERVICE
-# ═══════════════════════════════════════════════════════════
 chat_service = ChatService()
 
-
-# ═══════════════════════════════════════════════════════════
-# MIDDLEWARE — timing only
-# ═══════════════════════════════════════════════════════════
 _NO_LOG_PATHS = {"/health", "/"}
+
 
 @app.middleware("http")
 async def _timing_middleware(request: Request, call_next):
@@ -179,15 +157,12 @@ async def _timing_middleware(request: Request, call_next):
     return response
 
 
-# ═══════════════════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════════════════
 def _sanitize(text) -> str:
     return (text or "").replace("\x00", "").strip()
 
 
 async def _iter_stream(stream):
-    """Unified async iterator for sync and async generators."""
+ 
     if inspect.isasyncgen(stream):
         async for chunk in stream:
             if chunk:
@@ -195,31 +170,12 @@ async def _iter_stream(stream):
     else:
         for chunk in stream:
             if chunk:
-                yield str(chunk)
-            await asyncio.sleep(0)
+                out = str(chunk)
+                yield out
+                if len(out) < 40:
+                    await asyncio.sleep(0)
 
 
-async def _batched_stream(stream, batch_size: int = STREAM_BATCH_CHARS):
-
-    buf = ""
-    async for chunk in _iter_stream(stream):
-        buf += chunk
-        if len(buf) >= batch_size:
-            # flush at last space to avoid mid-word cuts
-            last_space = max(buf.rfind(" "), buf.rfind("\n"))
-            if last_space > 0:
-                yield buf[:last_space + 1]
-                buf = buf[last_space + 1:]
-            else:
-                yield buf
-                buf = ""
-    if buf:
-        yield buf
-
-
-# ═══════════════════════════════════════════════════════════
-# ROUTES
-# ═══════════════════════════════════════════════════════════
 @app.get("/")
 async def root():
     return {"status": "running", "version": "5.2", "ws_connections": registry.count}
@@ -230,12 +186,10 @@ async def health():
     return {"status": "healthy", "ws_connections": registry.count}
 
 
-
 @app.post("/chat/new")
 async def new_chat(request: Request):
-
     try:
-        body      = await request.json()
+        body       = await request.json()
         session_id = str(body.get("session_id") or "").strip()
         if not session_id:
             return JSONResponse(status_code=400, content={"error": "missing session_id"})
@@ -247,11 +201,10 @@ async def new_chat(request: Request):
         return JSONResponse(status_code=500, content={"error": "clear_failed"})
 
 
-# ═══════════════════════════════════════════════════════════
-# HTTP CHAT
-# ═══════════════════════════════════════════════════════════
 @app.post("/chat")
 async def chat_http(request: ChatRequest):
+    await _warmup.run_once()
+
     session_id = request.session_id or str(uuid4())
     question   = _sanitize(request.question)
 
@@ -265,9 +218,9 @@ async def chat_http(request: ChatRequest):
 
     async def _generate():
         try:
-            stream = chat_service.stream_chat(question, session_id)
-            async for batch in _batched_stream(stream):
-                yield batch
+            async for batch in _iter_stream(chat_service.stream_chat(question, session_id)):
+                if batch:
+                    yield batch
         except Exception:
             logger.exception("[HTTP STREAM ERROR]")
             yield "حصل خطأ مؤقت، حاول مرة أخرى"
@@ -279,30 +232,27 @@ async def chat_http(request: ChatRequest):
     )
 
 
-# ═══════════════════════════════════════════════════════════
-# WEBSOCKET CHAT
-# ═══════════════════════════════════════════════════════════
 @app.websocket("/chat/ws")
 async def chat_ws(websocket: WebSocket):
     await websocket.accept()
+    await _warmup.run_once()
 
     cid = str(uuid4())[:8]
     registry.add(cid, websocket)
     logger.info("[WS %s] connected (total=%d)", cid, registry.count)
 
     async def _keepalive():
-        while True:
-            await asyncio.sleep(WS_PING_INTERVAL)
-            try:
+        try:
+            while True:
+                await asyncio.sleep(WS_PING_INTERVAL)
                 await websocket.send_json({"type": "ping"})
-            except Exception:
-                break
+        except Exception:
+            pass
 
     ping_task = asyncio.create_task(_keepalive())
 
     try:
         while True:
-            # ── Receive ───────────────────────────────────
             try:
                 data = await asyncio.wait_for(
                     websocket.receive_json(),
@@ -323,7 +273,6 @@ async def chat_ws(websocket: WebSocket):
             if data.get("type") == "pong":
                 continue
 
-            # ── Validate ──────────────────────────────────
             question   = _sanitize(data.get("question"))
             session_id = data.get("session_id") or str(uuid4())
 
@@ -333,21 +282,16 @@ async def chat_ws(websocket: WebSocket):
 
             logger.info("[WS %s] q=%.50s", cid, question)
 
-            # ── Stream ────────────────────────────────────
             try:
-                stream = chat_service.stream_chat(question, session_id)
+                async for batch in _iter_stream(chat_service.stream_chat(question, session_id)):
+                    if batch:
+                        await websocket.send_json({
+                            "type":       "chunk",
+                            "content":    batch,
+                            "session_id": session_id,
+                        })
 
-                async for batch in _batched_stream(stream):
-                    await websocket.send_json({
-                        "type":       "chunk",
-                        "content":    batch,
-                        "session_id": session_id,
-                    })
-
-                await websocket.send_json({
-                    "type":       "done",
-                    "session_id": session_id,
-                })
+                await websocket.send_json({"type": "done", "session_id": session_id})
 
             except Exception:
                 logger.exception("[WS %s] stream error", cid)
