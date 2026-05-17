@@ -1,4 +1,3 @@
-
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -24,10 +23,6 @@ logger = logging.getLogger(__name__)
 brain    = MedicalAIBrain()
 router   = ResponseRouter()
 llm      = LLMManager()
-# ProMemory is stateful — must only be instantiated once.
-# The double REDIS_HOST warning in logs means ChatService also
-# creates its own instance. Fix: import this singleton from pipeline
-# in chat_service.py instead of calling ProMemory() again.
 memory   = ProMemory()
 cache    = SmartCache()
 fallback = SafeFallback()
@@ -39,12 +34,10 @@ executor = ThreadPoolExecutor(max_workers=4)
 # QUICK RESPONSES
 # ═══════════════════════════════════════════════════════════
 QUICK_RESPONSES: dict[str, str] = {
-    # Islamic greetings
     "السلام عليكم":                        "وعليكم السلام ورحمة الله وبركاته 🌷",
     "سلام عليكم":                          "وعليكم السلام ورحمة الله وبركاته 🌷",
     "السلام عليكم ورحمه الله":             "وعليكم السلام ورحمة الله وبركاته 🌷",
     "السلام عليكم ورحمة الله وبركاته":    "وعليكم السلام ورحمة الله وبركاته 🌷",
-    # Greetings
     "اهلا":          "أهلاً بحضرتك 🌷",
     "اهلا بيك":      "أهلاً وسهلاً بيك 🌷",
     "اهلين":         "أهلاً وسهلاً 👋",
@@ -55,42 +48,35 @@ QUICK_RESPONSES: dict[str, str] = {
     "مساء الخير":    "مساء النور 🌙",
     "صباح النور":    "صباح الفل 🌷",
     "مساء النور":    "مساء الورد 🌷",
-    # How are you
     "ازيك":          "الحمد لله 🌷 اتمنى تكون بخير",
     "عامل ايه":      "الحمد لله 🌷 تمام",
     "عامل اي":       "الحمد لله 🌷",
     "اخبارك":        "تمام الحمد لله 🌷",
     "اخبارك ايه":    "الحمد لله كله تمام 🌷",
     "كيفك":          "الحمد لله 🌷",
-    # Thanks
     "شكرا":          "العفو 🌷",
     "شكراً":         "العفو 🌷",
     "متشكر":         "تحت أمرك 🌷",
     "تسلم":          "الله يسلمك 🌷",
     "ميرسي":         "العفو 👋",
-    # Goodbye
     "باي":           "مع السلامة 👋",
     "سلام":          "مع السلامة 🌷",
     "اشوفك بعدين":   "في أمان الله 👋",
     "تصبح علي خير":  "وانت من أهله 🌙",
-    # Identity
     "مين انت":       "أنا رفيق 🧠 مساعد طبي ذكي 👨‍⚕️",
     "انت مين":       "أنا رفيق 🧠 مساعد طبي ذكي 🌷",
     "اسمك ايه":      "أنا رفيق 👨‍⚕️",
     "بتعمل اي":      "أنا مساعد طبي ذكي بساعدك تفهم الأعراض بشكل مبسط وآمن 🌷",
-    # Help
     "ساعدني":        "أكيد 🌷 اتفضل قول استفسارك",
     "محتاج مساعده":  "أكيد 🌷 احكيلي الأعراض أو السؤال اللي عندك",
     "عاوز مساعده":   "تحت أمرك 🌷 قول اللي مضايقك",
     "محتاج دكتور":   "قول الأعراض اللي عندك وأنا هحاول أوجهك للتخصص المناسب 🌷",
-    # Misc polite
     "بتفهم":         "بحاول أساعد بأفضل شكل ممكن 🌷",
     "انت ذكي":       "شكراً 🌷 بحاول أكون مفيد",
     "انت جامد":      "تسلم 🌷",
     "الحمد لله":     "دايمًا يارب 🌷",
     "يارب":          "ربنا يطمّن قلبك 🌷",
     "ربنا يخليك":    "ويخليك 🌷",
-    # Empty
     "":              "اتفضل اكتب استفسارك الطبي 🌷",
 }
 
@@ -99,47 +85,34 @@ QUICK_RESPONSES: dict[str, str] = {
 # NORMALIZATION
 # ═══════════════════════════════════════════════════════════
 def norm(text: str) -> str:
-    """Normalise Arabic text for quick-response lookup."""
     if not text:
         return ""
     text = text.lower().strip()
     for old, new in {"أ": "ا", "إ": "ا", "آ": "ا", "ة": "ه", "ى": "ي"}.items():
         text = text.replace(old, new)
     text = re.sub(r"[^\w\s\u0600-\u06FF]", " ", text)
-    text = re.sub(r"(.)\1{3,}", r"\1", text)        # collapse repeated chars
+    text = re.sub(r"(.)\1{3,}", r"\1", text)
     text = " ".join(text.split())
     return text
 
 
 # ═══════════════════════════════════════════════════════════
-# EMERGENCY — hard keyword guard (runs before any LLM call)
+# EMERGENCY
 # ═══════════════════════════════════════════════════════════
-# Why regex instead of a plain list?
-#   Plain "اختناق in text" misses "عندي اختناق شوية".
-#   Regex lets us match word roots loosely without an NLP library.
 _EMERGENCY_RE = re.compile(
-    # chest pain / tightness
     r"الم.*صدر|صدر.*الم|وجع.*صدر|صدر.*وجع"
     r"|ضيق.*صدر|صدر.*ضيق"
-    # breathing
     r"|اختناق|ضيق.*تنف[سش]|مش.*قادر.*اتنف[سش]|تنف[سش].*صعب|صعوبه.*تنف[سش]"
     r"|مش.*لاقي.*نف[سس]|نف[سس].*مش.*طالع"
-    # cardiac
     r"|قلب.*بيتوقف|قلب.*وقف|نوبه.*قلبيه|جلط[هة]"
-    # consciousness
     r"|فقدان.*وعي|بفقد.*وعي|اغماء|بغمي.*عليه|طاح.*ارض"
-    # severe bleeding / stroke
     r"|نزيف.*شديد|بينزف.*كتير|سكت[هة].*دماغيه"
-    # neurological
     r"|شلل.*فجا|وجه.*عوج.*فجا|كلام.*مش.*واضح.*فجا"
-    # poisoning / overdose
     r"|جرع[هة].*زياد[هة]|اكل.*سم|تسمم.*شديد"
-    # self-harm
     r"|انتحار|اذي.*نفس[يه]?|عاوز.*اموت",
     re.IGNORECASE,
 )
 
-# Richer, human emergency reply (replaces the terse old one)
 _EMERGENCY_REPLY = (
     "🚨 اللي بتقوله محتاج اهتمام طبي فوري.\n\n"
     "الأعراض دي — زي الاختناق أو الألم الشديد في الصدر — مش وقتها نستنى أو نجرب.\n\n"
@@ -150,14 +123,6 @@ _EMERGENCY_REPLY = (
 
 
 def _is_emergency(question: str, analysis: dict, route: str) -> bool:
-    """
-    Triple-layer emergency check — any layer firing is enough.
-
-    Layer 1 — keyword regex on raw question (fastest, no LLM needed)
-    Layer 2 — brain.analyze() flagged emergency=True
-    Layer 3 — router returned "emergency" route
-    Layer 4 — brain flagged severity="high" (extra safety net)
-    """
     if _EMERGENCY_RE.search(question):
         logger.warning("[EMERGENCY] keyword match on: %.60s", question)
         return True
@@ -183,7 +148,6 @@ _WEAK_PATTERNS = re.compile(
 
 
 def _is_weak(text: str) -> bool:
-    """Return True if the LLM response is empty, too short, or an error."""
     if not text or len(text.strip()) < 20:
         return True
     return bool(_WEAK_PATTERNS.search(text))
@@ -192,7 +156,6 @@ def _is_weak(text: str) -> bool:
 # ═══════════════════════════════════════════════════════════
 # ANALYSIS RESULT VALIDATOR
 # ═══════════════════════════════════════════════════════════
-# "rag" added — ResponseRouter returns it for knowledge-retrieval questions
 _VALID_ROUTES = {"normal", "emergency", "followup", "clarify", "rag"}
 
 _ANALYSIS_DEFAULTS: dict = {
@@ -205,52 +168,38 @@ _ANALYSIS_DEFAULTS: dict = {
 
 
 def _validate_analysis(raw) -> dict:
-    """
-    Ensure brain.analyze() returned a sane dict.
-    Missing keys are filled with safe defaults so downstream code
-    never has to do .get("key") with a default everywhere.
-    """
     if not isinstance(raw, dict):
         logger.warning("[ANALYSIS] invalid type %s — using defaults", type(raw))
         return dict(_ANALYSIS_DEFAULTS)
-
     result = dict(_ANALYSIS_DEFAULTS)
     result.update({k: v for k, v in raw.items() if k in _ANALYSIS_DEFAULTS})
-
-    # Coerce types
     result["emergency"] = bool(result["emergency"])
     result["needs_rag"] = bool(result["needs_rag"])
     result["severity"]  = str(result["severity"]).lower()
     result["specialty"] = str(result["specialty"]).lower() or "general"
-
     return result
 
 
 # ═══════════════════════════════════════════════════════════
 # CACHE GUARD
 # ═══════════════════════════════════════════════════════════
-_MIN_CACHE_LEN = 15   # anything shorter is likely an error fragment
+_MIN_CACHE_LEN = 15
 
 
 def _cache_get(key: str) -> str | None:
-    """
-    Fetch from SmartCache with type + length validation.
-    Returns None (cache miss) if the stored value looks corrupt.
-    """
     try:
         value = cache.get(key)
         if isinstance(value, str) and len(value) >= _MIN_CACHE_LEN:
             return value
         if value is not None:
             logger.debug("[CACHE] evicting short/invalid entry for key=%s", key)
-            cache.delete(key)           # evict silently if SmartCache supports it
+            cache.delete(key)
     except Exception as exc:
         logger.warning("[CACHE GET] %s", exc)
     return None
 
 
 def _cache_set(key: str, value: str) -> None:
-    """Store in cache only if the value is worth keeping."""
     if not isinstance(value, str) or len(value) < _MIN_CACHE_LEN:
         return
     try:
@@ -295,10 +244,6 @@ def _retrieval_fn(question: str) -> str:
 
 
 def _fallback_fn(question: str) -> str:
-    """
-    SafeFallback returns a pre-written answer for common questions.
-    We validate it before using it — empty or weak answers are discarded.
-    """
     try:
         result = fallback.get(question)
         if isinstance(result, str) and not _is_weak(result):
@@ -321,10 +266,6 @@ def _memory_fn(session_id: str) -> list:
 # ROUTE VALIDATOR
 # ═══════════════════════════════════════════════════════════
 def _safe_route(analysis: dict, question: str) -> str:
-    """
-    Call ResponseRouter and normalise the result to a known value.
-    Falls back to "normal" on any error or unknown return value.
-    """
     try:
         route = router.route(analysis, question)
         route = str(route).lower().strip() if route else "normal"
@@ -344,14 +285,6 @@ _BOUNDARY_RE = re.compile(r'^(.*[\s\n،,\.؟?!:;\-–—])(.*?)$', re.DOTALL)
 
 
 def _flush_words(buf: str) -> tuple[str, str]:
-    """
-    Split buf at the last safe word boundary.
-    Returns (ready_to_send, leftover).
-
-    '...الصداع م'  →  ('...الصداع ', 'م')   ← 'م' stays buffered
-    '...الصداع '   →  ('...الصداع ', '')     ← all flushed
-    'الصداع'        →  ('', 'الصداع')         ← no boundary yet
-    """
     m = _BOUNDARY_RE.match(buf)
     if m:
         return m.group(1), m.group(2)
@@ -359,13 +292,13 @@ def _flush_words(buf: str) -> tuple[str, str]:
 
 
 # ═══════════════════════════════════════════════════════════
-# POST-PROCESS (cache/memory only — never re-sent to client)
+# POST-PROCESS
 # ═══════════════════════════════════════════════════════════
 def _post_process(text: str) -> str:
     if not text:
         return ""
-    text = re.sub(r"\n{3,}", "\n\n", text)           # max 1 blank line
-    text = re.sub(r"[^\S\n]+", " ", text)            # collapse inline spaces
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[^\S\n]+", " ", text)
     text = "\n".join(line.strip() for line in text.splitlines())
     return text.strip()
 
@@ -387,14 +320,12 @@ def run_pipeline(question: str, session_id: str):
 
         normalized = norm(question)
 
-        # ── 1. Quick reply (no LLM needed) ───────────────
+        # ── 1. Quick reply ────────────────────────────────
         if normalized in QUICK_RESPONSES:
             yield QUICK_RESPONSES[normalized]
             return
 
-        # ── 2. Emergency keyword check (BEFORE anything else) ──
-        # We run this NOW — before cache, before LLM, before brain.
-        # If the message is clearly an emergency, we must not delay.
+        # ── 2. Emergency keyword check ────────────────────
         if _EMERGENCY_RE.search(question):
             logger.warning("[EMERGENCY] early keyword match — aborting to reply")
             yield _EMERGENCY_REPLY
@@ -422,7 +353,7 @@ def run_pipeline(question: str, session_id: str):
             "memory":    executor.submit(_memory_fn,    session_id),
         }
         results = {
-            k: _safe_future(v, k, timeout=35.0 if k == 'retrieval' else 8.0)
+            k: _safe_future(v, k, timeout=35.0 if k == "retrieval" else 8.0)
             for k, v in futures.items()
         }
 
@@ -434,7 +365,7 @@ def run_pipeline(question: str, session_id: str):
         # ── 6. Routing ────────────────────────────────────
         route = _safe_route(analysis, question)
 
-        # ── 7. Emergency — full check (all layers) ────────
+        # ── 7. Emergency full check ───────────────────────
         if _is_emergency(question, analysis, route):
             yield _EMERGENCY_REPLY
             return
@@ -459,6 +390,7 @@ def run_pipeline(question: str, session_id: str):
         raw_buffer  = ""
         word_buffer = ""
         has_output  = False
+        MIN_CHUNK   = 30
 
         try:
             stream = llm.stream(messages, route)
@@ -470,14 +402,15 @@ def run_pipeline(question: str, session_id: str):
                     continue
 
                 word_buffer += str(chunk)
-                to_yield, word_buffer = _flush_words(word_buffer)
 
-                if to_yield:
-                    raw_buffer += to_yield
-                    has_output  = True
-                    yield to_yield
+                if len(word_buffer) >= MIN_CHUNK:
+                    to_yield, word_buffer = _flush_words(word_buffer)
+                    if to_yield:
+                        raw_buffer += to_yield
+                        has_output  = True
+                        yield to_yield
 
-            # Flush remaining partial token at end-of-stream
+            # فلش الباقي في الآخر
             if word_buffer:
                 raw_buffer += word_buffer
                 has_output  = True
@@ -488,21 +421,18 @@ def run_pipeline(question: str, session_id: str):
 
         except Exception as exc:
             logger.exception("[LLM STREAM ERROR] %s", exc)
-            # Try fallback before giving up
             if fallback_response:
                 yield fallback_response
                 return
             yield "الخدمة مشغولة حاليًا، حاول مرة تانية بعد شوية."
             return
 
-        # ── 10. Post-process for cache/memory ────────────
+        # ── 10. Post-process ──────────────────────────────
         final_response = _post_process(clean_output(raw_buffer))
 
-        # If LLM gave a weak answer, prefer the pre-written fallback
         if _is_weak(final_response) and fallback_response:
             final_response = fallback_response
 
-        # Enforce medical specialty tone/disclaimer if needed
         try:
             final_response = enforce_specialty(
                 final_response,

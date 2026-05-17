@@ -24,7 +24,7 @@ from backend.rag.retrieval import retrieve
 # ═══════════════════════════════════════════════════════════
 WS_RECEIVE_TIMEOUT = 300
 WS_PING_INTERVAL   = 30
-STREAM_BATCH_CHARS = 40
+STREAM_BATCH_CHARS = 100
 HTTP_STREAM_MEDIA  = "text/plain; charset=utf-8"
 
 
