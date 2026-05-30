@@ -15,7 +15,7 @@ medical_dataset_clean.json
 # Virtual environments
 venv/
 .env
-.env.*
+
 
 # IDEs
 .vscode/
